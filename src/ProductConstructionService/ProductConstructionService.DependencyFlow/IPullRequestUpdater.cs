@@ -11,10 +11,10 @@ public interface IPullRequestUpdater
     Task<bool> CheckPullRequestAsync(
         PullRequestCheck pullRequestCheck);
 
-    Task<bool> ProcessPendingUpdatesAsync(
+    Task ProcessPendingUpdatesAsync(
         SubscriptionUpdateWorkItem update);
 
-    Task<bool> UpdateAssetsAsync(
+    Task UpdateAssetsAsync(
         Guid subscriptionId,
         SubscriptionType type,
         int buildId,

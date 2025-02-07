@@ -108,7 +108,7 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
     ///     PRs are marked as non-updateable so that we can allow pull request checks to complete on a PR prior
     ///     to pushing additional commits.
     /// </remarks>
-    public async Task<bool> UpdateAssetsAsync(
+    public async Task UpdateAssetsAsync(
         Guid subscriptionId,
         SubscriptionType type,
         int buildId,
@@ -116,7 +116,7 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         string sourceSha,
         List<Asset> assets)
     {
-        return await ProcessPendingUpdatesAsync(new()
+        await ProcessPendingUpdatesAsync(new()
         {
             UpdaterId = Id.ToString(),
             SubscriptionId = subscriptionId,
@@ -135,7 +135,7 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
     /// <returns>
     ///     True if updates have been applied; <see langword="false" /> otherwise.
     /// </returns>
-    public async Task<bool> ProcessPendingUpdatesAsync(SubscriptionUpdateWorkItem update)
+    public async Task ProcessPendingUpdatesAsync(SubscriptionUpdateWorkItem update)
     {
         _logger.LogInformation("Processing pending updates for subscription {subscriptionId}", update.SubscriptionId);
 
@@ -164,7 +164,7 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
                     _logger.LogInformation("PR {url} for subscription {subscriptionId} cannot be updated at this time. Deferring update..", pr.Url, update.SubscriptionId);
                     await _pullRequestUpdateReminders.SetReminderAsync(update, DefaultReminderDelay, isCodeFlow);
                     await _pullRequestCheckReminders.UnsetReminderAsync(isCodeFlow);
-                    return false;
+                    return;
                 default:
                     throw new NotImplementedException($"Unknown PR status {prStatus}");
             }
@@ -173,7 +173,8 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         // Code flow updates are handled separetely
         if (isCodeFlow)
         {
-            return await ProcessCodeFlowUpdateAsync(update, pr);
+            await ProcessCodeFlowUpdateAsync(update, pr);
+            return;
         }
 
         // If we have an existing PR, update it
@@ -181,7 +182,7 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         {
             await UpdatePullRequestAsync(pr, update);
             await _pullRequestUpdateReminders.UnsetReminderAsync(isCodeFlow);
-            return true;
+            return;
         }
 
         // Create a new (regular) dependency update PR
@@ -196,7 +197,7 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         }
 
         await _pullRequestUpdateReminders.UnsetReminderAsync(isCodeFlow);
-        return true;
+        return;
     }
 
     public async Task<bool> CheckPullRequestAsync(PullRequestCheck pullRequestCheck)
@@ -850,10 +851,11 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
     /// <summary>
     /// Alternative to ProcessPendingUpdatesAsync that is used in the code flow (VMR) scenario.
     /// </summary>
-    private async Task<bool> ProcessCodeFlowUpdateAsync(
+    private async Task ProcessCodeFlowUpdateAsync(
         SubscriptionUpdateWorkItem update,
         InProgressPullRequest? pr)
     {
+        // Compare last SHA with the build SHA to see if we already have this SHA in the PR
         if (update.SourceSha == pr?.SourceSha)
         {
             _logger.LogInformation("PR {url} for {subscription} is already up to date ({sha})",
@@ -864,7 +866,7 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
             await SetPullRequestCheckReminder(pr, true);
             await _pullRequestUpdateReminders.UnsetReminderAsync(isCodeFlow: true);
 
-            return true;
+            return;
         }
 
         if (pr == null)
@@ -876,7 +878,7 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
             if (prBranch == null)
             {
                 _logger.LogInformation("No changes required for subscription {subscriptionId}, no pull request created", update.SubscriptionId);
-                return true;
+                return;
             }
 
             // Step 2. Create a PR
@@ -886,7 +888,7 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
                 prBranch,
                 targetBranch);
 
-            return true;
+            return;
         }
 
         // Step 3. Update the PR
@@ -900,17 +902,16 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
             _logger.LogError(e, "Failed to update sources and packages for PR {url} of subscription {subscriptionId}",
                 pr.Url,
                 update.SubscriptionId);
-            return false;
+            return;
         }
 
         _logger.LogInformation("Code flow update processed for pull request {prUrl}", pr.Url);
-        return true;
     }
 
     /// <summary>
     /// Updates an existing code-flow branch with new changes. Returns true if there were updates to push.
     /// </summary>
-    private async Task<bool> UpdateAssetsAndSources(SubscriptionUpdateWorkItem update, InProgressPullRequest pullRequest)
+    private async Task UpdateAssetsAndSources(SubscriptionUpdateWorkItem update, InProgressPullRequest pullRequest)
     {
         var subscription = await _barClient.GetSubscriptionAsync(update.SubscriptionId)
                         ?? throw new Exception($"Subscription {update.SubscriptionId} not found");
@@ -1007,8 +1008,6 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         pullRequest.LastUpdate = DateTime.UtcNow;
         await SetPullRequestCheckReminder(pullRequest, true);
         await _pullRequestUpdateReminders.UnsetReminderAsync(true);
-
-        return true;
     }
 
     /// <summary>
