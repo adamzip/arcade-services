@@ -130,55 +130,45 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         });
     }
 
-    /// <summary>
-    ///     Process any pending pull request updates.
-    /// </summary>
-    /// <returns>
-    ///     True if updates have been applied; <see langword="false" /> otherwise.
-    /// </returns>
     public async Task ProcessPendingUpdatesAsync(SubscriptionUpdateWorkItem update)
     {
         _logger.LogInformation("Processing pending updates for subscription {subscriptionId}", update.SubscriptionId);
 
-        // Check if we track an on-going PR already
-        InProgressPullRequest? pr = await _pullRequestState.TryGetStateAsync();
         bool isCodeFlow = update.SubscriptionType == SubscriptionType.DependenciesAndSources;
 
-        if (pr == null)
-        {
-            _logger.LogInformation("No existing pull request state found");
-        }
-        else
+        InProgressPullRequest? pr = await _pullRequestState.TryGetStateAsync();
+
+        if (pr != null)
         {
             var prStatus = await GetPullRequestStatusAsync(pr, isCodeFlow);
-            switch (prStatus)
+            if (prStatus is PullRequestStatus.Invalid or PullRequestStatus.Completed)
             {
-                case PullRequestStatus.Completed:
-                case PullRequestStatus.Invalid:
-                    // If the PR is completed, we will open a new one
-                    pr = null;
-                    break;
-                case PullRequestStatus.InProgressCanUpdate:
-                    // If we can update it, we will do it below
-                    break;
-                case PullRequestStatus.InProgressCannotUpdate:
-                    _logger.LogInformation("PR {url} for subscription {subscriptionId} cannot be updated at this time. Deferring update..", pr.Url, update.SubscriptionId);
-                    await _pullRequestUpdateReminders.SetReminderAsync(update, DefaultReminderDelay, isCodeFlow);
-                    await _pullRequestCheckReminders.UnsetReminderAsync(isCodeFlow);
-                    return;
-                default:
-                    throw new NotImplementedException($"Unknown PR status {prStatus}");
+                pr = null;
+            }
+            else if (prStatus == PullRequestStatus.InProgressCannotUpdate)
+            {
+                _logger.LogInformation("PR {url} for subscription {subscriptionId} cannot be updated at this time. Deferring update..", pr.Url, update.SubscriptionId);
+                await _pullRequestUpdateReminders.SetReminderAsync(update, DefaultReminderDelay, isCodeFlow);
+                await _pullRequestCheckReminders.UnsetReminderAsync(isCodeFlow);
+                return;
             }
         }
 
-        // Code flow updates are handled separetely
         if (isCodeFlow)
         {
             await ProcessCodeFlowUpdateAsync(update, pr);
-            return;
         }
+        else 
+        {
+            await ProcessDependencyFlowUpdateAsync(update, pr, isCodeFlow);
+        }
+    }
 
-        // If we have an existing PR, update it
+    private async Task ProcessDependencyFlowUpdateAsync(
+        SubscriptionUpdateWorkItem update, 
+        InProgressPullRequest? pr,
+        bool isCodeFlow)
+    {
         if (pr != null)
         {
             await UpdatePullRequestAsync(pr, update);
@@ -198,7 +188,6 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         }
 
         await _pullRequestUpdateReminders.UnsetReminderAsync(isCodeFlow);
-        return;
     }
 
     public async Task<bool> CheckPullRequestAsync(PullRequestCheck pullRequestCheck)
@@ -870,22 +859,15 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
             return;
         }
 
+        //todo make sure an appropriate exception is thrown in case of missing entities - in *all* implementations
         var subscription = await _barClient.GetSubscriptionAsync(update.SubscriptionId);
         var build = await _barClient.GetBuildAsync(update.BuildId);
-
-        if (subscription == null || build == null)
-        {
-            // todo create business-logic methods for getting DB entities that throw appropriate exceptions when not found
-            throw new Exception($"Subscription {update.SubscriptionId} or build {update.BuildId} not found");
-        }
-
         var isForwardFlow = subscription.TargetDirectory != null;
-
-        NativePath localRepoPath;
-
         string prHeadBranch = pr == null ? GetNewBranchName(subscription.TargetBranch) : pr.HeadBranch;
 
+        NativePath localRepoPath;
         CodeFlowResult codeFlowRes;
+
         if (isForwardFlow)
         {
             codeFlowRes = await _vmrForwardFlower.FlowForwardAsync(subscription, build, prHeadBranch, cancellationToken: default);
@@ -900,21 +882,18 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         if (!codeFlowRes.hadUpdates)
         {
             return;
+            //todo what about setting check reminder?
         }
         
         if (pr == null)
         {
-            // todo - what is the difference between the subscription obtained in GetTargetAsync() below, and the one we have in scope?
-            // (var targetRepository, var targetBranch) = await GetTargetAsync();
-            var prBranch = await CreateCodeFlowBranchAsync(prHeadBranch, subscription, localRepoPath);
-                       
-            // todo can we really get prBranch == null even if we had codeFlowRes.hadUpdates == true?
-            if (prBranch == null)
+            // TODO https://github.com/dotnet/arcade-services/issues/4199: Handle failures (conflict, non-ff etc)
+            using (var scope = _telemetryRecorder.RecordGitOperation(TrackedGitOperation.Push, subscription.TargetRepository))
             {
-                _logger.LogInformation("No changes required for subscription {subscriptionId}, no pull request created", update.SubscriptionId);
-                return;
+                await _gitClient.Push(localRepoPath, prHeadBranch, subscription.TargetRepository);
+                scope.SetSuccess();
             }
-            await CreateCodeFlowPullRequestAsync(update, subscription.TargetRepository, subscription.TargetBranch, prBranch);
+            await CreateCodeFlowPullRequestAsync(update, subscription.TargetRepository, subscription.TargetBranch, prHeadBranch);
         }
         else
         {
@@ -978,31 +957,6 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         pullRequest.LastUpdate = DateTime.UtcNow;
         await SetPullRequestCheckReminder(pullRequest, true);
         await _pullRequestUpdateReminders.UnsetReminderAsync(true);
-    }
-
-    /// <summary>
-    /// Creates the code flow branch for the given subscription update.
-    /// </summary>
-    private async Task<string?> CreateCodeFlowBranchAsync(
-        string newBranchName,
-        Microsoft.DotNet.ProductConstructionService.Client.Models.Subscription subscription,
-        string localRepoPath)
-    {
-
-
-        _logger.LogInformation("Code changes for {subscriptionId} ready in local branch {branch}",
-            subscription.Id,
-            newBranchName);
-
-        // TODO https://github.com/dotnet/arcade-services/issues/4199: Handle failures (conflict, non-ff etc)
-        using (var scope = _telemetryRecorder.RecordGitOperation(TrackedGitOperation.Push, subscription.TargetRepository))
-        {
-            await _gitClient.Push(localRepoPath, newBranchName, subscription.TargetRepository);
-            scope.SetSuccess();
-        }
-
-        _logger.LogInformation("Code-flow branch {prBranch} pushed", newBranchName);
-        return newBranchName;
     }
 
     private async Task CreateCodeFlowPullRequestAsync(

@@ -161,17 +161,10 @@ internal class VmrForwardFlower : VmrCodeFlower, IVmrForwardFlower
         string baseBranch,
         string targetBranch,
         bool targetBranchExisted,
+        Codeflow lastFlow,
         bool discardPatches = false,
         CancellationToken cancellationToken = default)
     {
-        ISourceComponent repoInfo = _sourceManifest.GetRepoVersion(mapping.Name);
-
-        // Refresh the repo
-        await sourceRepo.FetchAllAsync([mapping.DefaultRemote, repoInfo.RemoteUri], cancellationToken);
-        await sourceRepo.CheckoutAsync(build.Commit);
-
-        Codeflow lastFlow = await GetLastFlowAsync(mapping, sourceRepo, currentIsBackflow: false);
-
         bool hasChanges = await FlowCodeAsync(
             lastFlow,
             new ForwardFlow(lastFlow.TargetSha, build.Commit),

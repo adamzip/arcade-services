@@ -26,7 +26,7 @@ public interface IPcsVmrForwardFlower
     /// <param name="build">Build to flow</param>
     /// <param name="targetBranch">Target branch to make the changes on</param>
     /// <returns>True when there were changes to be flown</returns>
-    Task<bool> FlowForwardAsync(
+    Task<CodeFlowResult> FlowForwardAsync(
         Subscription subscription,
         Build build,
         string targetBranch,
@@ -60,7 +60,7 @@ internal class PcsVmrForwardFlower : VmrForwardFlower, IPcsVmrForwardFlower
         _repositoryCloneManager = repositoryCloneManager;
     }
 
-    public async Task<bool> FlowForwardAsync(
+    public async Task<CodeFlowResult> FlowForwardAsync(
         Subscription subscription,
         Build build,
         string targetBranch,
@@ -73,7 +73,6 @@ internal class PcsVmrForwardFlower : VmrForwardFlower, IPcsVmrForwardFlower
             targetBranch,
             cancellationToken);
 
-        // Prepare repo
         SourceMapping mapping = _dependencyTracker.GetMapping(subscription.TargetDirectory);
         ISourceComponent repoVersion = _sourceManifest.GetRepoVersion(mapping.Name);
         List<string> remotes = (new[] { mapping.DefaultRemote, repoVersion.RemoteUri })
@@ -88,7 +87,12 @@ internal class PcsVmrForwardFlower : VmrForwardFlower, IPcsVmrForwardFlower
             ShouldResetClones,
             cancellationToken);
 
-        return await FlowForwardAsync(
+        await sourceRepo.FetchAllAsync([mapping.DefaultRemote, repoVersion.RemoteUri], cancellationToken);
+        await sourceRepo.CheckoutAsync(build.Commit);
+
+        Codeflow lastFlow = await GetLastFlowAsync(mapping, sourceRepo, currentIsBackflow: false);
+
+        bool hadUpdates = await FlowForwardAsync(
             mapping,
             sourceRepo,
             build,
@@ -96,8 +100,15 @@ internal class PcsVmrForwardFlower : VmrForwardFlower, IPcsVmrForwardFlower
             baseBranch,
             targetBranch,
             targetBranchExisted,
+            lastFlow,
             discardPatches: true,
             cancellationToken);
+
+        return new CodeFlowResult(
+            hadUpdates,
+            sourceRepo.Path,
+            lastFlow.RepoSha,
+            lastFlow.VmrSha);
     }
 
     // During forward flow, we're targeting a specific remote VMR branch, so we should make sure our local branch is reset to it
