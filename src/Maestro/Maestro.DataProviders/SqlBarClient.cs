@@ -274,6 +274,8 @@ public class SqlBarClient : IBasicBarClient
         return flowGraph;
     }
 
+    //TODO - should we have a dedicated place (eg converters class) for these methods?
+    //it seems they need to be public, but maybe here is not the right place
     private Subscription ToClientModelSubscription(Data.Models.Subscription other)
     {
         return new Subscription(

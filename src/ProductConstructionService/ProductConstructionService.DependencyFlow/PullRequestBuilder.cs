@@ -44,15 +44,12 @@ internal interface IPullRequestBuilder
     /// <summary>
     ///    Generate the title for a code flow PR.
     /// </summary>
-    Task<string> GenerateCodeFlowPRTitleAsync(
-        SubscriptionUpdateWorkItem update,
-        string targetBranch);
+    Task<string> GenerateCodeFlowPRTitleAsync(Subscription subscription);
 
     /// <summary>
     ///    Generate the description for a code flow PR.
     /// </summary>
-    Task<string> GenerateCodeFlowPRDescriptionAsync(
-        SubscriptionUpdateWorkItem update);
+    string GenerateCodeFlowPRDescription(Subscription subscription, Build build);
 }
 
 internal class PullRequestBuilder : IPullRequestBuilder
@@ -193,30 +190,28 @@ internal class PullRequestBuilder : IPullRequestBuilder
     }
 
     public async Task<string> GenerateCodeFlowPRTitleAsync(
-        SubscriptionUpdateWorkItem update,
-        string targetBranch)
+        Subscription subscription)
     {
-        return await CreateTitleWithRepositories($"[{targetBranch}] Source code changes from ", [update.SubscriptionId]);
+        return await CreateTitleWithRepositories($"[{subscription.TargetBranch}] Source code changes from ", [subscription.Id]);
     }
 
-    public async Task<string> GenerateCodeFlowPRDescriptionAsync(SubscriptionUpdateWorkItem update)
+    public string GenerateCodeFlowPRDescription(
+        Subscription subscription,
+        Build build)
     {
-        var build = await _barClient.GetBuildAsync(update.BuildId)
-            ?? throw new Exception($"Failed to find build {update.BuildId} for subscription {update.SubscriptionId}");
-
         return
             $"""
-            {GetStartMarker(update.SubscriptionId)}
+            {GetStartMarker(subscription.Id)}
 
-            This pull request is bringing source changes from **{update.SourceRepo}**.
+            This pull request is bringing source changes from **{subscription.SourceRepository}**.
             
-            - **Subscription**: {update.SubscriptionId}
+            - **Subscription**: {subscription.Id}
             - **Build**: {build.AzureDevOpsBuildNumber}
             - **Date Produced**: {build.DateProduced.ToUniversalTime():MMMM d, yyyy h:mm:ss tt UTC}
             - **Commit**: {build.Commit}
             - **Branch**: {build.GetBranch()}
 
-            {GetEndMarker(update.SubscriptionId)}
+            {GetEndMarker(subscription.Id)}
             """;
     }
 

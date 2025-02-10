@@ -130,6 +130,78 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         });
     }
 
+    public async Task UpdateAssetsAsync(
+        Subscription subscription,
+        Build build,
+        List<Asset> assets)
+    {
+        await ProcessPendingUpdatesAsync(new()
+        {
+            UpdaterId = Id.ToString(),
+            SubscriptionId = subscription.Id,
+            SubscriptionType = subscription.,
+            BuildId = buildId,
+            SourceSha = sourceSha,
+            SourceRepo = sourceRepo,
+            Assets = assets,
+            IsCoherencyUpdate = false,
+        });
+    }
+
+    private SubscriptionUpdateWorkItem CreateWorkItemPayload(
+        Subscription subscription,
+        Build build,
+        List<Asset> assets)
+    {
+        return new()
+        {
+            UpdaterId = Id.ToString(),
+            SubscriptionId = subscription.Id,
+            SubscriptionType = subscription.SourceEnabled ? SubscriptionType.DependenciesAndSources : SubscriptionType.Dependencies,
+            BuildId = build.Id,
+            SourceSha = build.Commit,
+            SourceRepo = build.GetRepository(),
+            Assets = assets,
+            IsCoherencyUpdate = false,
+        };
+    }
+
+    public async Task ProcessPendingUpdatesAsync
+        (
+        Subscription subscription,
+        Build build,
+        List<Asset> assets)
+    {
+        _logger.LogInformation("Processing pending updates for subscription {subscriptionId}", subscription.Id);
+
+        InProgressPullRequest? pr = await _pullRequestState.TryGetStateAsync();
+
+        if (pr != null)
+        {
+            var prStatus = await GetPullRequestStatusAsync(pr, subscription.SourceEnabled);
+            if (prStatus is PullRequestStatus.Invalid or PullRequestStatus.Completed)
+            {
+                pr = null;
+            }
+            else if (prStatus == PullRequestStatus.InProgressCannotUpdate)
+            {
+                _logger.LogInformation("PR {url} for subscription {subscriptionId} cannot be updated at this time. Deferring update..", pr.Url, subscription.Id);
+                await _pullRequestUpdateReminders.SetReminderAsync(CreateWorkItemPayload(subscription, build, assets), DefaultReminderDelay, subscription.SourceEnabled);
+                await _pullRequestCheckReminders.UnsetReminderAsync(subscription.SourceEnabled);
+                return;
+            }
+        }
+
+        if (subscription.SourceEnabled)
+        {
+            await ProcessCodeFlowUpdateAsync(subscription, build, assets, pr);
+        }
+        else
+        {
+            await ProcessDependencyFlowUpdateAsync(pr, subscription.SourceEnabled);
+        }
+    }
+
     public async Task ProcessPendingUpdatesAsync(SubscriptionUpdateWorkItem update)
     {
         _logger.LogInformation("Processing pending updates for subscription {subscriptionId}", update.SubscriptionId);
@@ -165,7 +237,8 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
     }
 
     private async Task ProcessDependencyFlowUpdateAsync(
-        SubscriptionUpdateWorkItem update, 
+        Subscription subscription
+        Build build,
         InProgressPullRequest? pr,
         bool isCodeFlow)
     {
@@ -530,7 +603,10 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         }
     }
 
-    private async Task UpdatePullRequestAsync(InProgressPullRequest pr, SubscriptionUpdateWorkItem update)
+    private async Task UpdatePullRequestAsync(
+        Subscription subscription,
+        Build build,
+        InProgressPullRequest pr)
     {
         (var targetRepository, var targetBranch) = await GetTargetAsync();
 
@@ -567,7 +643,7 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         // Replace all existing updates for the subscription id with the new update.
         // This avoids a potential issue where we may update the last applied build id
         // on the subscription to an older build id.
-        pr.ContainedSubscriptions.RemoveAll(s => s.SubscriptionId == update.SubscriptionId);
+        pr.ContainedSubscriptions.RemoveAll(s => s.SubscriptionId == subscription.Id);
 
         // Mark all previous dependency updates that are being updated as Updated. All new dependencies should not be
         // marked as update as they are new. Any dependency not being updated should not be marked as failed.
@@ -611,7 +687,7 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
 
         await darcRemote.UpdatePullRequestAsync(pr.Url, pullRequest);
         pr.LastUpdate = DateTime.UtcNow;
-        await SetPullRequestCheckReminder(pr, isCodeFlow: update.SubscriptionType == SubscriptionType.DependenciesAndSources);
+        await SetPullRequestCheckReminder(pr, isCodeFlow: subscription.SourceEnabled);
 
         _logger.LogInformation("Pull request '{prUrl}' updated", pr.Url);
     }
@@ -842,47 +918,51 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
     /// Alternative to ProcessPendingUpdatesAsync that is used in the code flow (VMR) scenario.
     /// </summary>
     private async Task ProcessCodeFlowUpdateAsync(
-        SubscriptionUpdateWorkItem update,
+        Subscription subscription,
+        Build build,
+        List<Asset> assets,
         InProgressPullRequest? pr)
     {
-        // todo can this really happen? is it only some race condition or edge case? Then maybe it can be handled by
-        // hadUpdates = false later in the method
-        if (update.SourceSha == pr?.SourceSha)
+        if (build.Commit == pr?.SourceSha)
         {
             _logger.LogInformation("PR {url} for {subscription} is already up to date ({sha})",
                 pr.Url,
-                update.SubscriptionId,
-                update.SourceSha);
+                subscription.Id,
+                build.Commit);
 
             await SetPullRequestCheckReminder(pr, true);
             await _pullRequestUpdateReminders.UnsetReminderAsync(isCodeFlow: true);
             return;
         }
 
-        //todo make sure an appropriate exception is thrown in case of missing entities - in *all* implementations
-        var subscription = await _barClient.GetSubscriptionAsync(update.SubscriptionId);
-        var build = await _barClient.GetBuildAsync(update.BuildId);
-        var isForwardFlow = subscription.TargetDirectory != null;
         string prHeadBranch = pr == null ? GetNewBranchName(subscription.TargetBranch) : pr.HeadBranch;
 
         NativePath localRepoPath;
         CodeFlowResult codeFlowRes;
 
+        var isForwardFlow = subscription.TargetDirectory != null;
         if (isForwardFlow)
         {
-            codeFlowRes = await _vmrForwardFlower.FlowForwardAsync(subscription, build, prHeadBranch, cancellationToken: default);
+            codeFlowRes = await _vmrForwardFlower.FlowForwardAsync(
+                await _barClient.GetSubscriptionAsync(subscription.Id), //todo we should convert these 
+                await _barClient.GetBuildAsync(build.Id), // instead of re-querying
+                prHeadBranch,
+                cancellationToken: default);
             localRepoPath = _vmrInfo.VmrPath;
         }
         else
         {
-            codeFlowRes = await _vmrBackFlower.FlowBackAsync(subscription, build, prHeadBranch, cancellationToken: default);
+            codeFlowRes = await _vmrBackFlower.FlowBackAsync(
+                await _barClient.GetSubscriptionAsync(subscription.Id), //todo we should convert these 
+                await _barClient.GetBuildAsync(build.Id), // instead of re-querying
+                prHeadBranch,
+                cancellationToken: default);
             localRepoPath = codeFlowRes.repoPath;
         }
 
         if (!codeFlowRes.hadUpdates)
         {
             return;
-            //todo what about setting check reminder?
         }
         
         if (pr == null)
@@ -893,20 +973,20 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
                 await _gitClient.Push(localRepoPath, prHeadBranch, subscription.TargetRepository);
                 scope.SetSuccess();
             }
-            await CreateCodeFlowPullRequestAsync(update, subscription.TargetRepository, subscription.TargetBranch, prHeadBranch);
+            await CreateCodeFlowPullRequestAsync(subscription, build, prHeadBranch);
         }
         else
         {
             try
             {
-                await UpdateAssetsAndSources(update, pr, subscription, localRepoPath);
+                await UpdateAssetsAndSources(pr, codeFlowRes, subscription, build, localRepoPath);
             }
             catch (Exception e)
             {
                 // TODO https://github.com/dotnet/arcade-services/issues/4198: Notify us about these kind of failures
                 _logger.LogError(e, "Failed to update sources and packages for PR {url} of subscription {subscriptionId}",
                     pr.Url,
-                    update.SubscriptionId);
+                    subscription.Id);
             }
         }
     }
@@ -915,9 +995,10 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
     /// Updates an existing code-flow branch with new changes. Returns true if there were updates to push.
     /// </summary>
     private async Task UpdateAssetsAndSources(
-        SubscriptionUpdateWorkItem update,
         InProgressPullRequest pullRequest,
-        Microsoft.DotNet.ProductConstructionService.Client.Models.Subscription subscription,
+        CodeFlowResult codeFlowRes,
+        Subscription subscription,
+        Build build,
         NativePath localRepoPath)
     {
         // TODO https://github.com/dotnet/arcade-services/issues/4199: Handle failures (conflict, non-ff etc)
@@ -928,7 +1009,7 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         }
         
 
-        pullRequest.SourceSha = update.SourceSha;
+        pullRequest.SourceSha = build.Commit;
 
         // TODO (https://github.com/dotnet/arcade-services/issues/3866): We need to update the InProgressPullRequest fully, assets and other info just like we do in UpdatePullRequestAsync
         // Right now, we are not flowing packages in codeflow subscriptions yet, so this functionality is no there
@@ -938,14 +1019,14 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         [
             new SubscriptionPullRequestUpdate
             {
-                SubscriptionId = update.SubscriptionId,
-                BuildId = update.BuildId
+                SubscriptionId = subscription.Id,
+                BuildId = build.Id
             }
         ];
 
         // Update PR's metadata
-        var title = await _pullRequestBuilder.GenerateCodeFlowPRTitleAsync(update, subscription.TargetBranch);
-        var description = await _pullRequestBuilder.GenerateCodeFlowPRDescriptionAsync(update);
+        var title = await _pullRequestBuilder.GenerateCodeFlowPRTitleAsync(subscription);
+        var description = _pullRequestBuilder.GenerateCodeFlowPRDescription(subscription, build);
 
         var remote = await _remoteFactory.CreateRemoteAsync(subscription.TargetRepository);
         await remote.UpdatePullRequestAsync(pullRequest.Url, new PullRequest
@@ -960,24 +1041,23 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
     }
 
     private async Task CreateCodeFlowPullRequestAsync(
-        SubscriptionUpdateWorkItem update,
-        string targetRepository,
-        string targetBranch,
+        Subscription subscription,
+        Build build,
         string prBranch)
     {
-        IRemote darcRemote = await _remoteFactory.CreateRemoteAsync(targetRepository);
+        IRemote darcRemote = await _remoteFactory.CreateRemoteAsync(subscription.TargetRepository);
         try
         {
-            var title = await _pullRequestBuilder.GenerateCodeFlowPRTitleAsync(update, targetBranch);
-            var description = await _pullRequestBuilder.GenerateCodeFlowPRDescriptionAsync(update);
+            var title = await _pullRequestBuilder.GenerateCodeFlowPRTitleAsync(subscription);
+            var description = _pullRequestBuilder.GenerateCodeFlowPRDescription(subscription, build);
 
             var prUrl = await darcRemote.CreatePullRequestAsync(
-                targetRepository,
+                subscription.TargetRepository,
                 new PullRequest
                 {
                     Title = title,
                     Description = description,
-                    BaseBranch = targetBranch,
+                    BaseBranch = subscription.TargetBranch,
                     HeadBranch = prBranch,
                 });
 
@@ -987,13 +1067,13 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
                 UpdaterId = Id.ToString(),
                 Url = prUrl,
                 HeadBranch = prBranch,
-                SourceSha = update.SourceSha,
+                SourceSha = build.Commit,
                 ContainedSubscriptions =
                 [
                     new()
                     {
-                        SubscriptionId = update.SubscriptionId,
-                        BuildId = update.BuildId
+                        SubscriptionId = subscription.Id,
+                        BuildId = build.Id
                     }
                 ]
             };
@@ -1014,11 +1094,12 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         catch (Exception e)
         {
             _logger.LogError(e, "Failed to create code flow pull request for subscription {subscriptionId}",
-                update.SubscriptionId);
-            await darcRemote.DeleteBranchAsync(targetRepository, prBranch);
+                subscription.Id);
+            await darcRemote.DeleteBranchAsync(subscription.TargetRepository, prBranch);
             throw;
         }
     }
 
     #endregion
 }
+
