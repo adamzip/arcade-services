@@ -149,7 +149,11 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         bool isCodeFlow = update.SubscriptionType == SubscriptionType.DependenciesAndSources;
         InProgressPullRequest? pr = await _pullRequestState.TryGetStateAsync();
 
-        if (pr != null)
+        if (pr == null)
+        {
+            _logger.LogInformation("No existing pull request state found");
+        }
+        else
         {
             if (!forceApply &&
                 pr.NextBuildsToProcess != null &&
@@ -963,6 +967,15 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         var isForwardFlow = subscription.TargetDirectory != null;
         string prHeadBranch = pr?.HeadBranch ?? GetNewBranchName(subscription.TargetBranch);
 
+        _logger.LogInformation(
+            "{direction}-flowing build {buildId} for subscription {subscriptionId} targeting {repo} / {targetBranch} to new branch {newBranch}",
+            isForwardFlow ? "Forward" : "Back",
+            update.BuildId,
+            subscription.Id,
+            subscription.TargetRepository,
+            subscription.TargetBranch,
+            prHeadBranch);
+
         NativePath localRepoPath;
         CodeFlowResult codeFlowRes;
         string previousSourceSha;
@@ -995,7 +1008,6 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         }
         catch (Exception e)
         {
-
             _logger.LogError(e, "Failed to flow source changes for build {buildId} in subscription {subscriptionId}",
                 build.Id,
                 subscription.Id);
@@ -1035,7 +1047,7 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
             catch (Exception e)
             {
                 // TODO https://github.com/dotnet/arcade-services/issues/4198: Notify us about these kind of failures
-                _logger.LogError(e, "Failed to update sources and packages for PR {url} of subscription {subscriptionId}",
+                _logger.LogError(e, "Failed to update PR {url} of subscription {subscriptionId}",
                     pr.Url,
                     update.SubscriptionId);
             }
