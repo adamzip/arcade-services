@@ -201,24 +201,15 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         InProgressPullRequest? pr,
         bool isCodeFlow)
     {
-        if (pr != null)
+        if (pr == null)
         {
-            await UpdatePullRequestAsync(pr, update);
-            await _pullRequestUpdateReminders.UnsetReminderAsync(isCodeFlow);
-            return;
-        }
-
-        // Create a new (regular) dependency update PR
-        var prUrl = await CreatePullRequestAsync(update);
-        if (prUrl == null)
-        {
-            _logger.LogInformation("No changes required for subscription {subscriptionId}, no pull request created", update.SubscriptionId);
+            await CreatePullRequestAsync(update);
         }
         else
         {
-            _logger.LogInformation("Pull request '{url}' for subscription {subscriptionId} created", prUrl, update.SubscriptionId);
-        }
+            await UpdatePullRequestAsync(pr, update);
 
+        }
         await _pullRequestUpdateReminders.UnsetReminderAsync(isCodeFlow);
     }
 
@@ -489,7 +480,7 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
     ///     Creates a pull request from the given updates.
     /// </summary>
     /// <returns>The pull request url when a pr was created; <see langref="null" /> if no PR is necessary</returns>
-    private async Task<string?> CreatePullRequestAsync(SubscriptionUpdateWorkItem update)
+    private async Task CreatePullRequestAsync(SubscriptionUpdateWorkItem update)
     {
         (var targetRepository, var targetBranch) = await GetTargetAsync();
         bool isCodeFlow = update.SubscriptionType == SubscriptionType.DependenciesAndSources;
@@ -501,7 +492,7 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
 
         if (repoDependencyUpdate.CoherencyCheckSuccessful && repoDependencyUpdate.RequiredUpdates.Count < 1)
         {
-            return null;
+            return;
         }
 
         var newBranchName = GetNewBranchName(targetBranch);
@@ -526,7 +517,7 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
                 })
                 .ToList();
 
-            var prUrl = await darcRemote.CreatePullRequestAsync(
+            string prUrl = await darcRemote.CreatePullRequestAsync(
                 targetRepository,
                 new PullRequest
                 {
@@ -571,7 +562,8 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
                     prUrl);
 
                 await SetPullRequestCheckReminder(inProgressPr, isCodeFlow);
-                return prUrl;
+                _logger.LogInformation("Pull request '{url}' for subscription {subscriptionId} created", prUrl, update.SubscriptionId);
+                return;
             }
 
             // If we did not create a PR, then mark the dependency flow as completed as nothing to do.
@@ -585,7 +577,6 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
             // Something wrong happened when trying to create the PR but didn't throw an exception (probably there was no diff).
             // We need to delete the branch also in this case.
             await darcRemote.DeleteBranchAsync(targetRepository, newBranchName);
-            return null;
         }
         catch
         {
@@ -691,33 +682,21 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         List<DependencyUpdateSummary> existingUpdates,
         List<(SubscriptionUpdateWorkItem update, List<DependencyUpdate> deps)> incomingUpdates)
     {
-        // First project the new updates to the final list
-        var mergedUpdates =
-            incomingUpdates.SelectMany(update => update.deps)
-                .Select(du => new DependencyUpdateSummary
+        var incomingUpdateSummaries = incomingUpdates
+            .SelectMany(x => x.deps)
+            .Select(du => new DependencyUpdateSummary
                 {
                     DependencyName = du.To.Name,
                     FromVersion = du.From.Version,
                     ToVersion = du.To.Version
-                }).ToList();
+                })
+            .ToList();
 
-        // Project to a form that is easy to search
-        var searchableUpdates =
-            mergedUpdates.Select(u => u.DependencyName).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        // Add any existing assets that weren't modified by the incoming update
-        if (existingUpdates != null)
-        {
-            foreach (DependencyUpdateSummary update in existingUpdates)
-            {
-                if (!searchableUpdates.Contains(update.DependencyName))
-                {
-                    mergedUpdates.Add(update);
-                }
-            }
-        }
-
-        return mergedUpdates;
+        return incomingUpdateSummaries
+                .Concat(existingUpdates)
+                .GroupBy(u => u.DependencyName)
+                .Select(g => g.First()) // Keep the incoming update, throw away the existing update
+                .ToList();
     }
 
     private class TargetRepoDependencyUpdate
@@ -766,6 +745,7 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
             });
 
         // Retrieve the source of the assets
+        // this one probably just selects the dependencies from the update item that are new compared to existing repo deps
         List<DependencyUpdate> dependenciesToUpdate = _coherencyUpdateResolver.GetRequiredNonCoherencyUpdates(
             update.SourceRepo,
             update.SourceSha,
