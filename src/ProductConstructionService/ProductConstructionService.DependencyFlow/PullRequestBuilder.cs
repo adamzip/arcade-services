@@ -11,6 +11,8 @@ using Microsoft.DotNet.DarcLib.Models.Darc;
 using Microsoft.Extensions.Logging;
 using ProductConstructionService.DependencyFlow.WorkItems;
 
+using BuildDTO = Microsoft.DotNet.ProductConstructionService.Client.Models.Build;
+
 namespace ProductConstructionService.DependencyFlow;
 
 internal interface IPullRequestBuilder
@@ -64,7 +66,7 @@ internal class PullRequestBuilder : IPullRequestBuilder
     private const string DependencyUpdateBegin = "[DependencyUpdate]: <> (Begin)";
     private const string DependencyUpdateEnd = "[DependencyUpdate]: <> (End)";
 
-    private const string COMMIT_DIFF_NOT_AVAILABLE_TXT = "Not available";
+    private const string CommitDiffNotAvailableMsg = "Not available";
 
     private readonly BuildAssetRegistryContext _context;
     private readonly IRemoteFactory _remoteFactory;
@@ -230,13 +232,13 @@ internal class PullRequestBuilder : IPullRequestBuilder
 
     private string CreateSourceDiffLink(
         SubscriptionUpdateWorkItem update,
-        Microsoft.DotNet.ProductConstructionService.Client.Models.Build build,
+        BuildDTO build,
         string previousSourceCommit)
     {
         // previous source commit may be null in the case of the first code flow between a repo and the VMR ?
         if (string.IsNullOrEmpty(previousSourceCommit))
         {
-            return COMMIT_DIFF_NOT_AVAILABLE_TXT;
+            return CommitDiffNotAvailableMsg;
         }
 
         string sourceDiffText = $"{Commit.GetShortSha(previousSourceCommit)}..{Commit.GetShortSha(build.Commit)}";
@@ -252,7 +254,7 @@ internal class PullRequestBuilder : IPullRequestBuilder
         }
         else
         {
-            return COMMIT_DIFF_NOT_AVAILABLE_TXT;
+            return CommitDiffNotAvailableMsg;
         }
     }
 

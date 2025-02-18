@@ -19,6 +19,8 @@ using Microsoft.DotNet.DarcLib.Models.VirtualMonoRepo;
 
 using Asset = ProductConstructionService.DependencyFlow.Model.Asset;
 using AssetData = Microsoft.DotNet.ProductConstructionService.Client.Models.AssetData;
+using SubscriptionDTO = Microsoft.DotNet.ProductConstructionService.Client.Models.Subscription;
+using System.Security.Policy;
 
 namespace ProductConstructionService.DependencyFlow;
 
@@ -994,7 +996,7 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         catch (Exception e)
         {
 
-            _logger.LogError(e, "Failed to flow changes for build {buildId} in subscription {subscriptionId}",
+            _logger.LogError(e, "Failed to flow source changes for build {buildId} in subscription {subscriptionId}",
                 build.Id,
                 subscription.Id);
             throw;
@@ -1019,21 +1021,17 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
             _logger.LogInformation("There were no code-flow updates for subscription {subscriptionId}", subscription.Id);
         }
 
-        if (pr == null)
+        if (pr == null && codeFlowRes.hadUpdates)
         {
-            if (codeFlowRes.hadUpdates)
-            {
-                await CreateCodeFlowPullRequestAsync(update, previousSourceSha, subscription.TargetRepository, subscription.TargetBranch, prHeadBranch);
-            }
+            await CreateCodeFlowPullRequestAsync(update, previousSourceSha, subscription.TargetRepository, subscription.TargetBranch, prHeadBranch);
         }
-        else
+        else if (pr != null)
         {
             try
             {
                 await UpdateCodeFlowPullRequestAsync(update, pr, previousSourceSha, isForwardFlow, subscription, localRepoPath);
                 _logger.LogInformation("Code flow update processed for pull request {prUrl}", pr.Url);
             }
-            
             catch (Exception e)
             {
                 // TODO https://github.com/dotnet/arcade-services/issues/4198: Notify us about these kind of failures
@@ -1052,7 +1050,7 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         InProgressPullRequest pullRequest,
         string previousSourceSha,
         bool isForwardFlow,
-        Microsoft.DotNet.ProductConstructionService.Client.Models.Subscription subscription,
+        SubscriptionDTO subscription,
         NativePath localRepoPath)
     {
         pullRequest.SourceSha = update.SourceSha;
