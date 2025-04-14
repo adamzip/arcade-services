@@ -54,6 +54,7 @@ public class InProgressPullRequest : DependencyFlowWorkItem
     [DataMember]
     public Dictionary<Guid, int> NextBuildsToProcess { get; set; } = [];
 
+    [DataMember]
     public CodeFlowDirection CodeFlowDirection { get; set; }
 }
 
