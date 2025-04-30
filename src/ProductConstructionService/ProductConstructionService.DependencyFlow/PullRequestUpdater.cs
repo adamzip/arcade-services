@@ -136,10 +136,10 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
                 BuildId = buildId,
                 SourceSha = sourceSha,
                 SourceRepo = sourceRepo,
-                Assets = assets,
                 IsCoherencyUpdate = false,
             },
-            forceApply);
+            forceApply,
+            assets);
     }
 
     /// <summary>
@@ -149,7 +149,10 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
     /// <returns>
     ///     True if updates have been applied; <see langword="false" /> otherwise.
     /// </returns>
-    public async Task ProcessPendingUpdatesAsync(SubscriptionUpdateWorkItem update, bool forceApply)
+    public async Task ProcessPendingUpdatesAsync(
+        SubscriptionUpdateWorkItem update,
+        bool forceApply,
+        List<Asset>? newBuildAssets)
     {
         _logger.LogInformation("Processing pending updates for subscription {subscriptionId}", update.SubscriptionId);
         bool isCodeFlow = update.SubscriptionType == SubscriptionType.DependenciesAndSources;
@@ -201,24 +204,25 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         }
         else 
         {
-            await ProcessDependencyUpdateAsync(update, pr, prInfo);
+            await ProcessDependencyUpdateAsync(update, pr, prInfo, newBuildAssets);
         }
     }
 
     private async Task ProcessDependencyUpdateAsync(
         SubscriptionUpdateWorkItem update, 
         InProgressPullRequest? pr,
-        PullRequest? prInfo)
+        PullRequest? prInfo,
+        List<Asset>? newBuildAssets)
     {
         if (pr != null && prInfo != null)
         {
-            await UpdatePullRequestAsync(update, pr, prInfo);
+            await UpdatePullRequestAsync(update, pr, prInfo, newBuildAssets);
             await _pullRequestUpdateReminders.UnsetReminderAsync(isCodeFlow: false);
             return;
         }
 
         // Create a new (regular) dependency update PR
-        var prUrl = await CreatePullRequestAsync(update);
+        var prUrl = await CreatePullRequestAsync(update, newBuildAssets);
         if (prUrl == null)
         {
             _logger.LogInformation("No changes required for subscription {subscriptionId}, no pull request created", update.SubscriptionId);
@@ -619,7 +623,11 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
         }
     }
 
-    private async Task UpdatePullRequestAsync(SubscriptionUpdateWorkItem update, InProgressPullRequest pr, PullRequest prInfo)
+    private async Task UpdatePullRequestAsync(
+        SubscriptionUpdateWorkItem update,
+        InProgressPullRequest pr,
+        PullRequest prInfo,
+        List<Asset>? newBuildAssets)
     {
         (var targetRepository, var targetBranch) = await GetTargetAsync();
 
@@ -755,6 +763,8 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
     /// </remarks>
     private async Task<TargetRepoDependencyUpdate> GetRequiredUpdates(
         SubscriptionUpdateWorkItem update,
+        List<Asset>? newBuildAssets,
+        IRemoteFactory remoteFactory,
         string targetRepository,
         string? prBranch,
         string targetBranch)
@@ -782,7 +792,8 @@ internal abstract class PullRequestUpdater : IPullRequestUpdater
             assetData,
             existingDependencies);
 
-        if (dependenciesToUpdate.Count < 1)
+        // 
+        if (dependenciesToUpdate.Count < 1 && newBuildAssets != null)
         {
             // No dependencies need to be updated.
             await UpdateSubscriptionsForMergedPRAsync(

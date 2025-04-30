@@ -13,7 +13,8 @@ public interface IPullRequestUpdater
 
     Task ProcessPendingUpdatesAsync(
         SubscriptionUpdateWorkItem update,
-        bool forceApply);
+        bool forceApply,
+        List<Asset> newBuildAssets);
 
     Task UpdateAssetsAsync(
         Guid subscriptionId,
