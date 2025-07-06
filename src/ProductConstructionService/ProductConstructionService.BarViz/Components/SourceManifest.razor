@@ -12,7 +12,7 @@
         <FluentTextField @bind-Value="_repoFilter" @oninput="OnRepoFilterChanged" placeholder="Filter repositories..." style="width: 300px;" />
         <FluentDataGrid Items="@_filteredSourceManifest" Style="width: 100%;">
             <PropertyColumn Property="@(p => p.Path)" Title="Path" Sortable="true" />
-            <PropertyColumn Property="@(p => p.RemoteUri)" Title="Repository" Sortable="true" />
+            <PropertyColumn Property="@(p => p.RemoteUri)" Title="Repository URL" Sortable="true" />
             <TemplateColumn Title="Commit SHA" Sortable="true" SortBy="@(GridSort<SourceManifestEntry>.ByAscending(p => p.CommitSha))">
                 <FluentStack VerticalAlignment="VerticalAlignment.Center">
                     <span style="font-family: monospace;">@(context.CommitSha.Substring(0, Math.Min(8, context.CommitSha.Length)))</span>
