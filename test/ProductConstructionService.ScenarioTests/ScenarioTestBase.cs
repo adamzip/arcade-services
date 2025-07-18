@@ -883,6 +883,12 @@ internal abstract partial class ScenarioTestBase
         await RunGitAsync("checkout", commit);
     }
 
+    protected static async Task FastForwardAsync()
+    {
+        await RunGitAsync("fetch", "origin");
+        await RunGitAsync("pull");
+    }
+
     protected static async Task CheckoutRemoteBranchAsync(string branchName)
     {
         await RunGitAsync("fetch", "origin", branchName);
@@ -1020,7 +1026,11 @@ internal abstract partial class ScenarioTestBase
 
         await Task.Delay(TimeSpan.FromSeconds(5 * 60 + 30));
 
+<<<<<<< HEAD
         List<Octokit.CheckRun> maestroChecks = await WaitForPullRequestMaestroChecksAsync(targetRepoName, targetBranch, pullRequest.Url, pullRequest.Head.Sha, repo.Id);
+=======
+        List<Octokit.CheckRun> maestroChecks = await WaitForPullRequestMaestroChecksAsync(pullRequest.Url, pullRequest.Head.Sha, repo.Id);
+>>>>>>> 584861c7778116820c4768ac59b78b9dc2ab9245
 
         foreach (var checkRun in maestroChecks)
         {
@@ -1034,14 +1044,14 @@ internal abstract partial class ScenarioTestBase
         return true;
     }
 
-    protected static async Task<List<Octokit.CheckRun>> WaitForPullRequestMaestroChecksAsync(string targetRepoName, string targetBranch, string prUrl, string commitSha, long repoId, int attempts = 2)
+    protected static async Task<List<Octokit.CheckRun>> WaitForPullRequestMaestroChecksAsync(string prUrl, string commitSha, long repoId, int attempts = 2)
     {
         while (attempts-- > 0)
         {
             TestContext.WriteLine($"Waiting for maestro checks to be added to the PR, attempts remaining {attempts}");
             Octokit.CheckRunsResponse prChecks = await GitHubApi.Check.Run.GetAllForReference(repoId, commitSha);
 
-            List<Octokit.CheckRun> maestroChecks = prChecks.CheckRuns
+            var maestroChecks = prChecks.CheckRuns
                 .Where(cr => cr.ExternalId.StartsWith(MergePolicyConstants.MaestroMergePolicyCheckRunPrefix))
                 .ToList();
 
