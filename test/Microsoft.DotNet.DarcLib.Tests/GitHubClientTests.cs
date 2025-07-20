@@ -145,7 +145,7 @@ internal class TestGitHubClient : GitHubClient
     public override IGitHubClient GetClient(string repoUri) => _client;
 
     public TestGitHubClient(string gitExecutable, string accessToken, ILogger logger, string temporaryRepositoryPath, IMemoryCache cache)
-        : base(new ResolvedTokenProvider(accessToken), new ProcessManager(logger, gitExecutable), logger, temporaryRepositoryPath, cache)
+        : base(new ResolvedTokenProvider(accessToken), new ProcessManager(logger, gitExecutable), temporaryRepositoryPath, cache, new NoOpRedisClient(), logger)
     {
     }
 }
@@ -197,7 +197,7 @@ public class GitHubClientTests
     public async Task TreeItemCacheTest(bool enableCache)
     {
         SimpleCache cache = enableCache ? new SimpleCache() : null;
-        var client = new Mock<GitHubClient>(null, null, NullLogger.Instance, null, cache);
+        var client = new Mock<GitHubClient>(null, null, null, cache, new NoOpRedisClient(), NullLogger.Instance);
 
         List<(string, string, TreeItem)> treeItemsToGet =
         [
@@ -297,7 +297,7 @@ public class GitHubClientTests
     [Test]
     public async Task GetGitTreeItemAbuseExceptionRetryTest()
     {
-        var client = new Mock<GitHubClient>(null, null, NullLogger.Instance, null, new SimpleCache());
+        var client = new Mock<GitHubClient>(null, null, null, new SimpleCache(), new NoOpRedisClient(), NullLogger.Instance);
 
         var blob = new Blob("foo", "fakeContent", EncodingType.Utf8, "somesha", 10);
         var treeItem = new TreeItem("fakePath", "fakeMode", TreeType.Blob, 10, "1", "https://url");
@@ -323,7 +323,7 @@ public class GitHubClientTests
     [Test]
     public async Task GetGitTreeItemAbuseExceptionRetryWithRateLimitTest()
     {
-        var client = new Mock<GitHubClient>(null, null, NullLogger.Instance, null, new SimpleCache());
+        var client = new Mock<GitHubClient>(null, null, null, new SimpleCache(), new NoOpRedisClient(), NullLogger.Instance);
 
         var blob = new Blob("foo", "fakeContent", EncodingType.Utf8, "somesha", 10);
         var treeItem = new TreeItem("fakePath", "fakeMode", TreeType.Blob, 10, "1", "https://url");
