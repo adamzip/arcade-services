@@ -2,6 +2,8 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Maestro.Data.Models;
 
 namespace Maestro.DataProviders.ConfigurationIngestor.Validations;
@@ -9,10 +11,21 @@ namespace Maestro.DataProviders.ConfigurationIngestor.Validations;
 public class DefaultChannelValidator
 {
     /// <summary>
-    /// Validates a DefaultChannel entity against business rules.
+    /// Validates a collection of DefaultChannels entities against business rules.
     /// </summary>
-    /// <param name="defaultChannel">The DefaultChannel to validate</param>
+    /// <param name="defaultChannels">The DefaultChannel collection to validate</param>
     /// <exception cref="ArgumentException">Thrown when validation fails</exception>
+    public static void ValidateDefaultChannels(
+        IEnumerable<DefaultChannel> defaultChannels)
+    {
+        EntityValidator.ValidateEntityUniqueness(defaultChannels);
+
+        foreach (DefaultChannel defaultChannel in defaultChannels)
+        {
+            ValidateDefaultChannel(defaultChannel);
+        }
+    }
+
     public static void ValidateDefaultChannel(DefaultChannel defaultChannel)
     {
         ArgumentNullException.ThrowIfNull(defaultChannel);

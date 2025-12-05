@@ -6,7 +6,7 @@ using System.Collections.Generic;
 
 namespace Maestro.DataProviders.ConfigurationIngestor;
 
-internal record ConfigurationData(
+public record ConfigurationData(
     IEnumerable<Subscription> Subscriptions,
     IEnumerable<Channel> Channels,
     IEnumerable<DefaultChannel> DefaultChannels,
